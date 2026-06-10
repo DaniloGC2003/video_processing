@@ -1,0 +1,169 @@
+import tensorflow as tf
+import numpy as np
+import cv2
+import math
+
+target_width = 256
+target_height = 256
+TRUST_THRESHOLD = 0.50
+MAX_ANGLE_VARIATION_THRESHOLD = 10
+
+def draw_keypoints(frame, keypoints, confidence_threshold):
+    y, x, c = frame.shape
+    shaped = np.squeeze(np.multiply(keypoints, [y, x, 1]))
+
+    for kp in shaped:
+        ky, kx, kp_conf = kp
+        if kp_conf > confidence_threshold:
+            cv2.circle(frame, (int(kx), int(ky)), 4, (0, 255, 0), -1)
+
+def draw_connections(frame, keypoints, edges, confidence_threshold):
+    y, x, c = frame.shape
+    shaped = np.squeeze(np.multiply(keypoints, [y, x, 1]))
+
+    for edge, color in edges.items():
+        p1, p2 = edge
+        y1, x1, c1 = shaped[p1]
+        y2, x2, c2 = shaped[p2]
+
+        if (c1 > confidence_threshold) & (c2 > confidence_threshold):
+            cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+
+def desenhar_numero(frame, numero):
+    fonte = cv2.FONT_HERSHEY_SIMPLEX
+    escala = 1
+    cor = (255, 255, 255)
+    espessura = 2
+
+    posicao = (10, 30)
+    posicao2 = (10, 50)
+    texto = "Rep count: " + str(numero)
+
+    cv2.putText(frame, texto, posicao, fonte, escala, cor, espessura)
+
+def calcular_angulo(A, B, C):
+    """
+    Calcula o ângulo ABC (em graus)
+    A, B, C são arrays [y, x, score]
+    """
+    BA = np.array([A[0] - B[0], A[1] - B[1]])
+    BC = np.array([C[0] - B[0], C[1] - B[1]])
+
+    produto = np.dot(BA, BC)
+    mag_BA = np.linalg.norm(BA)
+    mag_BC = np.linalg.norm(BC)
+
+    if mag_BA == 0 or mag_BC == 0:
+        return None
+
+    cos = produto / (mag_BA * mag_BC)
+    cos = np.clip(cos, -1.0, 1.0)   # evita erros numéricos
+
+    angulo = math.degrees(math.acos(cos))
+    return angulo
+
+EDGES = {
+    (0, 1): 'm',
+    (0, 2): 'c',
+    (1, 3): 'm',
+    (2, 4): 'c',
+    (0, 5): 'm',
+    (0, 6): 'c',
+    (5, 7): 'm',
+    (7, 9): 'm',
+    (6, 8): 'c',
+    (8, 10): 'c',
+    (5, 6): 'y',
+    (5, 11): 'm',
+    (6, 12): 'c',
+    (11, 12): 'y',
+    (11, 13): 'm',
+    (13, 15): 'm',
+    (12, 14): 'c',
+    (14, 16): 'c'
+}
+
+
+
+# Load model
+#interpreter = tf.lite.Interpreter(model_path='models/movenet_lightning/3.tflite')
+interpreter = tf.lite.Interpreter(model_path='models/movenet_thunder_tflite/3.tflite')
+interpreter.allocate_tensors()
+
+# Set side
+side = input("side: ")
+hip = 0
+knee = 0
+heel = 0
+if side == "l":
+    hip = 11
+    knee = 13
+    heel = 15
+elif side == "r":
+    hip = 12
+    knee = 14
+    heel = 16
+# variables used to count reps
+movement_initiated = False
+rep_count = 0
+previous_keypoints = None
+current_hip_knee_heel_angle = -1
+previous_hip_knee_heel_angle = -1
+
+# Make detections
+cap = cv2.VideoCapture(1)
+while cap.isOpened():
+    ret, frame = cap.read()
+
+    # Reshape image
+    img = frame.copy()
+    img = tf.image.resize_with_pad(np.expand_dims(img, axis=0), target_width, target_height)
+    input_image = tf.cast(img, dtype=tf.float32)
+
+    # Setup input and output 
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+
+    # Make predictions 
+    interpreter.set_tensor(input_details[0]['index'], np.array(input_image))
+    interpreter.invoke()
+    keypoints_with_scores = interpreter.get_tensor(output_details[0]['index'])
+
+    previous_hip_knee_heel_angle = current_hip_knee_heel_angle
+    current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
+                                                      keypoints_with_scores[0][0][knee],
+                                                      keypoints_with_scores[0][0][heel])
+    trust_hip = keypoints_with_scores[0][0][hip][2]
+    trust_knee = keypoints_with_scores[0][0][knee][2]
+    trust_heel = keypoints_with_scores[0][0][heel][2]
+    print(f"hip knee heel angle: {current_hip_knee_heel_angle}; "
+        f"trust score: {trust_hip:.2f}, {trust_knee:.2f}, {trust_heel:.2f}")
+
+    # only analyze frames with high trust
+    if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
+        # ignore first frame
+        if previous_hip_knee_heel_angle != -1:
+            # ignore frame if angle variation was too great
+            if abs(previous_hip_knee_heel_angle - current_hip_knee_heel_angle) < MAX_ANGLE_VARIATION_THRESHOLD:
+                if not movement_initiated and current_hip_knee_heel_angle < 100:
+                    movement_initiated = True
+                    print("Movement initiated")
+                if movement_initiated and current_hip_knee_heel_angle > 130:
+                    print("Movement finalized")
+                    movement_initiated = False
+                    rep_count += 1
+
+    # Rendering 
+    draw_connections(frame, keypoints_with_scores, EDGES, 0.4)
+    draw_keypoints(frame, keypoints_with_scores, 0.4)
+    desenhar_numero(frame, rep_count)
+
+    cv2.imshow('MoveNet Lightning', frame)
+
+    if cv2.waitKey(10) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+
