@@ -111,14 +111,23 @@ current_hip_knee_heel_angle = -1
 previous_hip_knee_heel_angle = -1
 
 # Make detections
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 while cap.isOpened():
     ret, frame = cap.read()
+    h, w, _ = frame.shape
+    print(f"frame shape: {h}, {w}")
+    size = min(h, w)
+    x_start = (w - size) // 2
+    y_start = (h - size) // 2
+    cropped = frame[y_start:y_start + size, x_start:x_start + size]
+    print(f"cropped shape: {cropped.shape}")
 
     # Reshape image
-    img = frame.copy()
-    img = tf.image.resize_with_pad(np.expand_dims(img, axis=0), target_width, target_height)
+    #img = frame.copy()
+    img = tf.image.resize_with_pad(np.expand_dims(cropped, axis=0), target_height=target_height, target_width=target_width)
     input_image = tf.cast(img, dtype=tf.float32)
+    print(f"img shape: {img.shape}")
+    print(f"input_image shape: {input_image.shape}")
 
     # Setup input and output 
     input_details = interpreter.get_input_details()
