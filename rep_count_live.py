@@ -5,8 +5,9 @@ import math
 
 target_width = 256
 target_height = 256
-TRUST_THRESHOLD = 0.50
+TRUST_THRESHOLD = 0.40
 MAX_ANGLE_VARIATION_THRESHOLD = 10
+webcam_id = 0
 
 def draw_keypoints(frame, keypoints, confidence_threshold):
     y, x, c = frame.shape
@@ -89,6 +90,9 @@ EDGES = {
 #interpreter = tf.lite.Interpreter(model_path='models/movenet_lightning/3.tflite')
 interpreter = tf.lite.Interpreter(model_path='models/movenet_thunder_tflite/3.tflite')
 interpreter.allocate_tensors()
+# Setup input and output 
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
 # Set side
 side = input("side: ")
@@ -111,27 +115,30 @@ current_hip_knee_heel_angle = -1
 previous_hip_knee_heel_angle = -1
 
 # Make detections
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(webcam_id)
 while cap.isOpened():
     ret, frame = cap.read()
+
+    if not ret:
+        print("Failed to capture frame")
+        break
+
     h, w, _ = frame.shape
-    print(f"frame shape: {h}, {w}")
+    #print(f"frame shape: {h}, {w}")
     size = min(h, w)
     x_start = (w - size) // 2
     y_start = (h - size) // 2
     cropped = frame[y_start:y_start + size, x_start:x_start + size]
-    print(f"cropped shape: {cropped.shape}")
+    #print(f"cropped shape: {cropped.shape}")
 
     # Reshape image
     #img = frame.copy()
     img = tf.image.resize_with_pad(np.expand_dims(cropped, axis=0), target_height=target_height, target_width=target_width)
     input_image = tf.cast(img, dtype=tf.float32)
-    print(f"img shape: {img.shape}")
-    print(f"input_image shape: {input_image.shape}")
+    #print(f"img shape: {img.shape}")
+    #print(f"input_image shape: {input_image.shape}")
 
-    # Setup input and output 
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
+
 
     # Make predictions 
     interpreter.set_tensor(input_details[0]['index'], np.array(input_image))
@@ -145,8 +152,8 @@ while cap.isOpened():
     trust_hip = keypoints_with_scores[0][0][hip][2]
     trust_knee = keypoints_with_scores[0][0][knee][2]
     trust_heel = keypoints_with_scores[0][0][heel][2]
-    print(f"hip knee heel angle: {current_hip_knee_heel_angle}; "
-        f"trust score: {trust_hip:.2f}, {trust_knee:.2f}, {trust_heel:.2f}")
+    #print(f"hip knee heel angle: {current_hip_knee_heel_angle}; "
+    #    f"trust score: {trust_hip:.2f}, {trust_knee:.2f}, {trust_heel:.2f}")
 
     # only analyze frames with high trust
     if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
@@ -154,25 +161,34 @@ while cap.isOpened():
         if previous_hip_knee_heel_angle != -1:
             # ignore frame if angle variation was too great
             if abs(previous_hip_knee_heel_angle - current_hip_knee_heel_angle) < MAX_ANGLE_VARIATION_THRESHOLD:
-                if not movement_initiated and current_hip_knee_heel_angle < 100:
-                    movement_initiated = True
-                    print("Movement initiated")
-                if movement_initiated and current_hip_knee_heel_angle > 130:
-                    print("Movement finalized")
+                # only analyze frame if person is not standing. delta_y < delta_x / 2
+                if (abs(keypoints_with_scores[0][0][hip][0] - keypoints_with_scores[0][0][knee][0]) <
+                        abs(keypoints_with_scores[0][0][hip][1] - keypoints_with_scores[0][0][knee][1]) / 2):
+                    # only analyze frame if person is facing the correct side
+                    if ((side == 'r' and keypoints_with_scores[0][0][hip][1] < keypoints_with_scores[0][0][knee][1]) or
+                            (side == 'l' and keypoints_with_scores[0][0][hip][1] > keypoints_with_scores[0][0][knee][1])):
+                        if not movement_initiated and current_hip_knee_heel_angle < 100:
+                            movement_initiated = True
+                            print("Movement initiated")
+                        if movement_initiated and current_hip_knee_heel_angle > 130:
+                            print("Movement finalized")
+                            movement_initiated = False
+                            rep_count += 1
+                    else:
+                        movement_initiated = False
+                else:
                     movement_initiated = False
-                    rep_count += 1
 
     # Rendering 
-    draw_connections(frame, keypoints_with_scores, EDGES, 0.4)
-    draw_keypoints(frame, keypoints_with_scores, 0.4)
-    desenhar_numero(frame, rep_count)
+    draw_connections(cropped, keypoints_with_scores, EDGES, TRUST_THRESHOLD)
+    draw_keypoints(cropped, keypoints_with_scores, TRUST_THRESHOLD)
+    desenhar_numero(cropped, rep_count)
 
-    cv2.imshow('MoveNet Lightning', frame)
+    cv2.imshow('MoveNet Lightning', cropped)
+    #cv2.imshow('original', frame)
 
     if cv2.waitKey(10) & 0xFF == ord('q'):
         break
 
 cap.release()
 cv2.destroyAllWindows()
-
-
