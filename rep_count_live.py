@@ -2,11 +2,13 @@ import tensorflow as tf
 import numpy as np
 import cv2
 import math
+import time
 
 target_width = 256
 target_height = 256
 TRUST_THRESHOLD = 0.40
 MAX_ANGLE_VARIATION_THRESHOLD = 10
+TIME_BEFORE_SET = 5
 webcam_id = 0
 
 def draw_keypoints(frame, keypoints, confidence_threshold):
@@ -30,17 +32,13 @@ def draw_connections(frame, keypoints, edges, confidence_threshold):
         if (c1 > confidence_threshold) & (c2 > confidence_threshold):
             cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
 
-def desenhar_numero(frame, numero):
+def draw_text(frame, string, position):
     fonte = cv2.FONT_HERSHEY_SIMPLEX
     escala = 1
     cor = (255, 255, 255)
     espessura = 2
 
-    posicao = (10, 30)
-    posicao2 = (10, 50)
-    texto = "Rep count: " + str(numero)
-
-    cv2.putText(frame, texto, posicao, fonte, escala, cor, espessura)
+    cv2.putText(frame, string, position, fonte, escala, cor, espessura)
 
 def calcular_angulo(A, B, C):
     """
@@ -95,10 +93,11 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
 # Set side
-side = input("side: ")
-hip = 0
-knee = 0
-heel = 0
+#side = input("side: ")
+side = 'r'
+hip = 12
+knee = 14
+heel = 16
 if side == "l":
     hip = 11
     knee = 13
@@ -113,6 +112,11 @@ rep_count = 0
 previous_keypoints = None
 current_hip_knee_heel_angle = -1
 previous_hip_knee_heel_angle = -1
+
+start_countdown = False
+countdown_timer_start = -1
+time_left_before_set = -1
+time_elapsed = 0
 
 # Make detections
 cap = cv2.VideoCapture(webcam_id)
@@ -182,13 +186,38 @@ while cap.isOpened():
     # Rendering 
     draw_connections(cropped, keypoints_with_scores, EDGES, TRUST_THRESHOLD)
     draw_keypoints(cropped, keypoints_with_scores, TRUST_THRESHOLD)
-    desenhar_numero(cropped, rep_count)
+
+    # Draw information on screen
+    if start_countdown:
+        time_elapsed = time.time() - countdown_timer_start
+        if time_elapsed!= 0:
+            time_left_before_set = round(TIME_BEFORE_SET - time_elapsed)
+        draw_text(cropped, f"time left: {time_left_before_set}", (10,60))
+        if time_elapsed > TIME_BEFORE_SET:
+            start_countdown = False
+
+    draw_text(cropped, f"reps: {rep_count}", (10,30))
 
     cv2.imshow('MoveNet Lightning', cropped)
     #cv2.imshow('original', frame)
 
     if cv2.waitKey(10) & 0xFF == ord('q'):
         break
+
+    if cv2.waitKey(10) & 0xFF == ord('l'):
+        side = 'l'
+        hip = 11
+        knee = 13
+        heel = 15
+        start_countdown = True
+        countdown_timer_start = time.time()
+    if cv2.waitKey(10) & 0xFF == ord('r'):
+        side = 'r'
+        hip = 12
+        knee = 14
+        heel = 16
+        start_countdown = True
+        countdown_timer_start = time.time()
 
 cap.release()
 cv2.destroyAllWindows()
