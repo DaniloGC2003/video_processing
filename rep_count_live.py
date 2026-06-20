@@ -6,7 +6,7 @@ import time
 
 target_width = 256
 target_height = 256
-TRUST_THRESHOLD = 0.40
+TRUST_THRESHOLD = 0.1
 MAX_ANGLE_VARIATION_THRESHOLD = 10
 TIME_BEFORE_SET = 5
 MAX_MISSING_FRAMES = 10
@@ -15,15 +15,19 @@ STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY = "<= 1/3"
 STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY = "1/3 <= X <= 2/3"
 STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY = "2/3 <= X <= 3/3"
 STATE_EXTENDED = "EXTENDED"
-STATE_LESS_THAN_HALFWAY = "HALF"
+STATE_LESS_THAN_HALFWAY = "LESS THAN HALF"
 STATE_MORE_THAN_HALFWAY = "MORE THAN HALF"
 STATE_NONE = "NONE"
 START_ANGLE = 105
 END_ANGLE = 150
-FRAMES_PER_STATE = 4
+FRAMES_PER_STATE = 2
+MAX_STANDING_UP_FRAMES = 5
+MAX_LOW_TRUST_FRAMES = 10
+MAX_FACING_WRONG_SIDE_FRAMES = 5
 webcam_id = 0
 one_third_of_the_way = START_ANGLE + (END_ANGLE - START_ANGLE) / 3
 two_thirds_of_the_way = START_ANGLE + 2 * (END_ANGLE - START_ANGLE) / 3
+halfway = START_ANGLE + (END_ANGLE - START_ANGLE) / 2
 
 def draw_keypoints(frame, keypoints, confidence_threshold):
     y, x, c = frame.shape
@@ -106,6 +110,7 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+predicted_side = 'r'
 # Set side
 #side = input("side: ")
 side = 'r'
@@ -134,13 +139,18 @@ time_left_before_set = -400
 time_elapsed = 0
 
 pose_visible = False
-consecutive_frame_counter = 0
+position_consecutive_frame_counter = 0
 pose_state = STATE_NONE
+standing_up_consecutive_frame_counter = 0
+low_trust_consecutive_frame_counter = 0
+facing_wrong_side_consecutive_frame_counter = 0
 
 # Make detections
 cap = cv2.VideoCapture(webcam_id)
 while cap.isOpened():
     ret, frame = cap.read()
+
+    start_time = time.time()
 
     if not ret:
         print("Failed to capture frame")
@@ -173,41 +183,82 @@ while cap.isOpened():
     trust_heel = keypoints_with_scores[0][0][heel][2]
     # ignore frames with low trust
     if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
-        previous_hip_knee_heel_angle = current_hip_knee_heel_angle
-        current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
-                                                      keypoints_with_scores[0][0][knee],
-                                                      keypoints_with_scores[0][0][heel])
-        if pose_state != STATE_NONE:
-            if pose_state == STATE_RESTING:
-                if START_ANGLE <= current_hip_knee_heel_angle <= one_third_of_the_way:
-                    consecutive_frame_counter += 1
-                if consecutive_frame_counter == FRAMES_PER_STATE:
-                    consecutive_frame_counter = 0
-                    pose_state = STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY
-            elif pose_state == STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY:
-                if one_third_of_the_way <= current_hip_knee_heel_angle <= two_thirds_of_the_way:
-                    consecutive_frame_counter += 1
-                if consecutive_frame_counter == FRAMES_PER_STATE:
-                    consecutive_frame_counter = 0
-                    pose_state = STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY
-            elif pose_state == STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY:
-                if two_thirds_of_the_way <= current_hip_knee_heel_angle <= END_ANGLE:
-                    consecutive_frame_counter += 1
-                if consecutive_frame_counter == FRAMES_PER_STATE:
-                    consecutive_frame_counter = 0
-                    pose_state = STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY
-            elif pose_state == STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY:
-                if END_ANGLE <= current_hip_knee_heel_angle:
-                    consecutive_frame_counter += 1
-                if consecutive_frame_counter == FRAMES_PER_STATE:
-                    consecutive_frame_counter = 0
-                    pose_state = STATE_EXTENDED
-            elif pose_state == STATE_EXTENDED:
-                if current_hip_knee_heel_angle <= START_ANGLE:
-                    pose_state = STATE_RESTING
+        low_trust_consecutive_frame_counter = 0
+        # only analyze frame if person is not standing. delta_y < delta_x / 2
+        if (abs(keypoints_with_scores[0][0][hip][0] - keypoints_with_scores[0][0][knee][0]) <
+            abs(keypoints_with_scores[0][0][hip][1] - keypoints_with_scores[0][0][knee][1]) / 2):
+            standing_up_consecutive_frame_counter = 0
+            # only analyze frame if person is facing the correct side
+            if ((side == 'r' and keypoints_with_scores[0][0][hip][1] < keypoints_with_scores[0][0][knee][1]) or
+                    (side == 'l' and keypoints_with_scores[0][0][hip][1] > keypoints_with_scores[0][0][knee][1])):
+                if side == 'r':
+                    predicted_side = 'r'
+                else:
+                    predicted_side = 'l'
+                facing_wrong_side_consecutive_frame_counter = 0
+                previous_hip_knee_heel_angle = current_hip_knee_heel_angle
+                current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
+                                                              keypoints_with_scores[0][0][knee],
+                                                              keypoints_with_scores[0][0][heel])
+                #print(f"current angle: {current_hip_knee_heel_angle}")
+                if pose_state != STATE_NONE:
+                    if pose_state == STATE_RESTING:
+                        if START_ANGLE <= current_hip_knee_heel_angle <= halfway:
+                            position_consecutive_frame_counter += 1
+                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                            position_consecutive_frame_counter = 0
+                            pose_state = STATE_LESS_THAN_HALFWAY
+                    elif pose_state == STATE_LESS_THAN_HALFWAY:
+                        if halfway <= current_hip_knee_heel_angle <= END_ANGLE:
+                            position_consecutive_frame_counter += 1
+                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                            position_consecutive_frame_counter = 0
+                            pose_state = STATE_MORE_THAN_HALFWAY
+                    elif pose_state == STATE_MORE_THAN_HALFWAY:
+                        if END_ANGLE <= current_hip_knee_heel_angle:
+                            position_consecutive_frame_counter += 1
+                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                            position_consecutive_frame_counter = 0
+                            pose_state = STATE_EXTENDED
+                            rep_count += 1
+                    elif pose_state == STATE_EXTENDED:
+                        if current_hip_knee_heel_angle <= START_ANGLE:
+                            position_consecutive_frame_counter += 1
+                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                            position_consecutive_frame_counter = 0
+                            pose_state = STATE_RESTING
+                else:
+                    if current_hip_knee_heel_angle <= START_ANGLE:
+                        pose_state = STATE_RESTING
+            else:
+                if side == 'r':
+                    predicted_side = 'l'
+                else:
+                    predicted_side = 'r'
+                if facing_wrong_side_consecutive_frame_counter != -1:
+                    facing_wrong_side_consecutive_frame_counter += 1
+                if facing_wrong_side_consecutive_frame_counter == MAX_FACING_WRONG_SIDE_FRAMES:
+                    print("Facing wrong side!")
+                    pose_state = STATE_NONE
+                    position_consecutive_frame_counter = 0
+                    facing_wrong_side_consecutive_frame_counter = -1
         else:
-            if current_hip_knee_heel_angle <= START_ANGLE:
-                pose_state = STATE_RESTING
+            if standing_up_consecutive_frame_counter != -1:
+                standing_up_consecutive_frame_counter += 1
+            if standing_up_consecutive_frame_counter == MAX_STANDING_UP_FRAMES:
+                print("Subject standing up!")
+                pose_state = STATE_NONE
+                position_consecutive_frame_counter = 0
+                standing_up_consecutive_frame_counter = -1
+    else:
+        if low_trust_consecutive_frame_counter != -1:
+            low_trust_consecutive_frame_counter += 1
+        if low_trust_consecutive_frame_counter == MAX_LOW_TRUST_FRAMES:
+            print("Low trust frames!")
+            pose_state = STATE_NONE
+            position_consecutive_frame_counter = 0
+            low_trust_consecutive_frame_counter = -1
+
 
     '''
     previous_hip_knee_heel_angle = current_hip_knee_heel_angle
@@ -253,12 +304,18 @@ while cap.isOpened():
         time_elapsed = time.time() - countdown_timer_start
         if time_elapsed!= 0:
             time_left_before_set = round(TIME_BEFORE_SET - time_elapsed)
-        draw_text(cropped, f"time left: {time_left_before_set}", (10,60))
+        draw_text(cropped, f"time left: {time_left_before_set}", (200,30))
         if time_elapsed > TIME_BEFORE_SET:
             start_countdown = False
 
+    end_time = time.time()
+    real_fps = 1 / (end_time - start_time)
+
     draw_text(cropped, f"reps: {rep_count}", (10,30))
-    draw_text(cropped, f"state: {pose_state}", (10,90))
+    draw_text(cropped, f"state: {pose_state}", (10,60))
+    draw_text(cropped, f"fps: {real_fps:.2f}", (10,90))
+    draw_text(cropped, f"expected side: {side}", (10,120))
+    draw_text(cropped, f"predicted side: {predicted_side}", (10,150))
 
     cv2.imshow('MoveNet Thunder', cropped)
     #cv2.imshow('original', frame)
