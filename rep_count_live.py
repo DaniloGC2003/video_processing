@@ -9,7 +9,21 @@ target_height = 256
 TRUST_THRESHOLD = 0.40
 MAX_ANGLE_VARIATION_THRESHOLD = 10
 TIME_BEFORE_SET = 5
+MAX_MISSING_FRAMES = 10
+STATE_RESTING = "REST" # angle below START_ANGLE
+STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY = "<= 1/3"
+STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY = "1/3 <= X <= 2/3"
+STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY = "2/3 <= X <= 3/3"
+STATE_EXTENDED = "EXTENDED"
+STATE_LESS_THAN_HALFWAY = "HALF"
+STATE_MORE_THAN_HALFWAY = "MORE THAN HALF"
+STATE_NONE = "NONE"
+START_ANGLE = 105
+END_ANGLE = 150
+FRAMES_PER_STATE = 4
 webcam_id = 0
+one_third_of_the_way = START_ANGLE + (END_ANGLE - START_ANGLE) / 3
+two_thirds_of_the_way = START_ANGLE + 2 * (END_ANGLE - START_ANGLE) / 3
 
 def draw_keypoints(frame, keypoints, confidence_threshold):
     y, x, c = frame.shape
@@ -112,11 +126,16 @@ rep_count = 0
 previous_keypoints = None
 current_hip_knee_heel_angle = -1
 previous_hip_knee_heel_angle = -1
+likely_hip_knee_heel_angle = -1
 
 start_countdown = False
-countdown_timer_start = -1
-time_left_before_set = -1
+countdown_timer_start = -400
+time_left_before_set = -400
 time_elapsed = 0
+
+pose_visible = False
+consecutive_frame_counter = 0
+pose_state = STATE_NONE
 
 # Make detections
 cap = cv2.VideoCapture(webcam_id)
@@ -149,6 +168,48 @@ while cap.isOpened():
     interpreter.invoke()
     keypoints_with_scores = interpreter.get_tensor(output_details[0]['index'])
 
+    trust_hip = keypoints_with_scores[0][0][hip][2]
+    trust_knee = keypoints_with_scores[0][0][knee][2]
+    trust_heel = keypoints_with_scores[0][0][heel][2]
+    # ignore frames with low trust
+    if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
+        previous_hip_knee_heel_angle = current_hip_knee_heel_angle
+        current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
+                                                      keypoints_with_scores[0][0][knee],
+                                                      keypoints_with_scores[0][0][heel])
+        if pose_state != STATE_NONE:
+            if pose_state == STATE_RESTING:
+                if START_ANGLE <= current_hip_knee_heel_angle <= one_third_of_the_way:
+                    consecutive_frame_counter += 1
+                if consecutive_frame_counter == FRAMES_PER_STATE:
+                    consecutive_frame_counter = 0
+                    pose_state = STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY
+            elif pose_state == STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY:
+                if one_third_of_the_way <= current_hip_knee_heel_angle <= two_thirds_of_the_way:
+                    consecutive_frame_counter += 1
+                if consecutive_frame_counter == FRAMES_PER_STATE:
+                    consecutive_frame_counter = 0
+                    pose_state = STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY
+            elif pose_state == STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY:
+                if two_thirds_of_the_way <= current_hip_knee_heel_angle <= END_ANGLE:
+                    consecutive_frame_counter += 1
+                if consecutive_frame_counter == FRAMES_PER_STATE:
+                    consecutive_frame_counter = 0
+                    pose_state = STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY
+            elif pose_state == STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY:
+                if END_ANGLE <= current_hip_knee_heel_angle:
+                    consecutive_frame_counter += 1
+                if consecutive_frame_counter == FRAMES_PER_STATE:
+                    consecutive_frame_counter = 0
+                    pose_state = STATE_EXTENDED
+            elif pose_state == STATE_EXTENDED:
+                if current_hip_knee_heel_angle <= START_ANGLE:
+                    pose_state = STATE_RESTING
+        else:
+            if current_hip_knee_heel_angle <= START_ANGLE:
+                pose_state = STATE_RESTING
+
+    '''
     previous_hip_knee_heel_angle = current_hip_knee_heel_angle
     current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
                                                       keypoints_with_scores[0][0][knee],
@@ -181,7 +242,7 @@ while cap.isOpened():
                     else:
                         movement_initiated = False
                 else:
-                    movement_initiated = False
+                    movement_initiated = False'''
 
     # Rendering 
     draw_connections(cropped, keypoints_with_scores, EDGES, TRUST_THRESHOLD)
@@ -197,8 +258,9 @@ while cap.isOpened():
             start_countdown = False
 
     draw_text(cropped, f"reps: {rep_count}", (10,30))
+    draw_text(cropped, f"state: {pose_state}", (10,90))
 
-    cv2.imshow('MoveNet Lightning', cropped)
+    cv2.imshow('MoveNet Thunder', cropped)
     #cv2.imshow('original', frame)
 
     if cv2.waitKey(10) & 0xFF == ord('q'):
