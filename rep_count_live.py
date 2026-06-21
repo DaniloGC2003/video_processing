@@ -10,14 +10,6 @@ TRUST_THRESHOLD = 0.1
 MAX_ANGLE_VARIATION_THRESHOLD = 10
 TIME_BEFORE_SET = 5
 MAX_MISSING_FRAMES = 10
-STATE_RESTING = "REST" # angle below START_ANGLE
-STATE_LESS_THAN_ONE_THIRD_OF_THE_WAY = "<= 1/3"
-STATE_BETWEEN_ONE_AND_TWO_THIRDS_OF_THE_WAY = "1/3 <= X <= 2/3"
-STATE_BETWEEN_TWO_AND_THREE_THIRDS_OF_THE_WAY = "2/3 <= X <= 3/3"
-STATE_EXTENDED = "EXTENDED"
-STATE_LESS_THAN_HALFWAY = "LESS THAN HALF"
-STATE_MORE_THAN_HALFWAY = "MORE THAN HALF"
-STATE_NONE = "NONE"
 START_ANGLE = 105
 END_ANGLE = 150
 FRAMES_PER_STATE = 2
@@ -25,9 +17,18 @@ MAX_STANDING_UP_FRAMES = 5
 MAX_LOW_TRUST_FRAMES = 10
 MAX_FACING_WRONG_SIDE_FRAMES = 5
 webcam_id = 0
-one_third_of_the_way = START_ANGLE + (END_ANGLE - START_ANGLE) / 3
-two_thirds_of_the_way = START_ANGLE + 2 * (END_ANGLE - START_ANGLE) / 3
+
+# Movement states
+STATE_RESTING = "REST" # hip-knee-heel angle below START_ANGLE
+STATE_EXTENDED = "EXTENDED" # hip-knee-heel angle above END_ANGLE
+STATE_LESS_THAN_HALFWAY = "LESS THAN HALF" # START_ANGLE <= current_hip_knee_heel_angle <= halfway
+STATE_MORE_THAN_HALFWAY = "MORE THAN HALF" # halfway <= current_hip_knee_heel_angle <= END_ANGLE
+STATE_NONE = "NONE" # state of the movement should be STATE_NONE when :
+                    #   - Program has just started
+                    #   - No person detected in the frame
+                    #   - Person not in the correct position
 halfway = START_ANGLE + (END_ANGLE - START_ANGLE) / 2
+
 
 def draw_keypoints(frame, keypoints, confidence_threshold):
     y, x, c = frame.shape
@@ -110,7 +111,9 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+# Side the person is facing according to the model
 predicted_side = 'r'
+
 # Set side
 #side = input("side: ")
 side = 'r'
@@ -125,31 +128,31 @@ elif side == "r":
     hip = 12
     knee = 14
     heel = 16
+
 # variables used to count reps
 movement_initiated = False
 rep_count = 0
 previous_keypoints = None
 current_hip_knee_heel_angle = -1
-previous_hip_knee_heel_angle = -1
-likely_hip_knee_heel_angle = -1
 
+# variables used to start the countdown after switching sides
 start_countdown = False
 countdown_timer_start = -400
 time_left_before_set = -400
 time_elapsed = 0
 
-pose_visible = False
+# variables used to check if the person is in the correct position
 position_consecutive_frame_counter = 0
 pose_state = STATE_NONE
 standing_up_consecutive_frame_counter = 0
 low_trust_consecutive_frame_counter = 0
 facing_wrong_side_consecutive_frame_counter = 0
 
-# Make detections
 cap = cv2.VideoCapture(webcam_id)
 while cap.isOpened():
     ret, frame = cap.read()
 
+    # used to calculate FPS
     start_time = time.time()
 
     if not ret:
@@ -157,21 +160,14 @@ while cap.isOpened():
         break
 
     h, w, _ = frame.shape
-    #print(f"frame shape: {h}, {w}")
     size = min(h, w)
     x_start = (w - size) // 2
     y_start = (h - size) // 2
     cropped = frame[y_start:y_start + size, x_start:x_start + size]
-    #print(f"cropped shape: {cropped.shape}")
 
     # Reshape image
-    #img = frame.copy()
     img = tf.image.resize_with_pad(np.expand_dims(cropped, axis=0), target_height=target_height, target_width=target_width)
     input_image = tf.cast(img, dtype=tf.float32)
-    #print(f"img shape: {img.shape}")
-    #print(f"input_image shape: {input_image.shape}")
-
-
 
     # Make predictions 
     interpreter.set_tensor(input_details[0]['index'], np.array(input_image))
@@ -183,11 +179,11 @@ while cap.isOpened():
     trust_heel = keypoints_with_scores[0][0][heel][2]
     # ignore frames with low trust
     if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
-        low_trust_consecutive_frame_counter = 0
+        low_trust_consecutive_frame_counter = 0 # reset low_trust_consecutive_frame_counter
         # only analyze frame if person is not standing. delta_y < delta_x / 2
         if (abs(keypoints_with_scores[0][0][hip][0] - keypoints_with_scores[0][0][knee][0]) <
             abs(keypoints_with_scores[0][0][hip][1] - keypoints_with_scores[0][0][knee][1]) / 2):
-            standing_up_consecutive_frame_counter = 0
+            standing_up_consecutive_frame_counter = 0 # reset standing_up_consecutive_frame_counter
             # only analyze frame if person is facing the correct side
             if ((side == 'r' and keypoints_with_scores[0][0][hip][1] < keypoints_with_scores[0][0][knee][1]) or
                     (side == 'l' and keypoints_with_scores[0][0][hip][1] > keypoints_with_scores[0][0][knee][1])):
@@ -195,12 +191,14 @@ while cap.isOpened():
                     predicted_side = 'r'
                 else:
                     predicted_side = 'l'
-                facing_wrong_side_consecutive_frame_counter = 0
-                previous_hip_knee_heel_angle = current_hip_knee_heel_angle
+
+                facing_wrong_side_consecutive_frame_counter = 0 # reset facing_wrong_side_consecutive_frame_counter
+
                 current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
                                                               keypoints_with_scores[0][0][knee],
                                                               keypoints_with_scores[0][0][heel])
                 #print(f"current angle: {current_hip_knee_heel_angle}")
+
                 if pose_state != STATE_NONE:
                     if pose_state == STATE_RESTING:
                         if START_ANGLE <= current_hip_knee_heel_angle <= halfway:
@@ -259,47 +257,11 @@ while cap.isOpened():
             position_consecutive_frame_counter = 0
             low_trust_consecutive_frame_counter = -1
 
-
-    '''
-    previous_hip_knee_heel_angle = current_hip_knee_heel_angle
-    current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
-                                                      keypoints_with_scores[0][0][knee],
-                                                      keypoints_with_scores[0][0][heel])
-    trust_hip = keypoints_with_scores[0][0][hip][2]
-    trust_knee = keypoints_with_scores[0][0][knee][2]
-    trust_heel = keypoints_with_scores[0][0][heel][2]
-    #print(f"hip knee heel angle: {current_hip_knee_heel_angle}; "
-    #    f"trust score: {trust_hip:.2f}, {trust_knee:.2f}, {trust_heel:.2f}")
-
-    # only analyze frames with high trust
-    if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
-        # ignore first frame
-        if previous_hip_knee_heel_angle != -1:
-            # ignore frame if angle variation was too great
-            if abs(previous_hip_knee_heel_angle - current_hip_knee_heel_angle) < MAX_ANGLE_VARIATION_THRESHOLD:
-                # only analyze frame if person is not standing. delta_y < delta_x / 2
-                if (abs(keypoints_with_scores[0][0][hip][0] - keypoints_with_scores[0][0][knee][0]) <
-                        abs(keypoints_with_scores[0][0][hip][1] - keypoints_with_scores[0][0][knee][1]) / 2):
-                    # only analyze frame if person is facing the correct side
-                    if ((side == 'r' and keypoints_with_scores[0][0][hip][1] < keypoints_with_scores[0][0][knee][1]) or
-                            (side == 'l' and keypoints_with_scores[0][0][hip][1] > keypoints_with_scores[0][0][knee][1])):
-                        if not movement_initiated and current_hip_knee_heel_angle < 100:
-                            movement_initiated = True
-                            print("Movement initiated")
-                        if movement_initiated and current_hip_knee_heel_angle > 130:
-                            print("Movement finalized")
-                            movement_initiated = False
-                            rep_count += 1
-                    else:
-                        movement_initiated = False
-                else:
-                    movement_initiated = False'''
-
     # Rendering 
     draw_connections(cropped, keypoints_with_scores, EDGES, TRUST_THRESHOLD)
     draw_keypoints(cropped, keypoints_with_scores, TRUST_THRESHOLD)
 
-    # Draw information on screen
+    # show countdown on screen
     if start_countdown:
         time_elapsed = time.time() - countdown_timer_start
         if time_elapsed!= 0:
@@ -311,6 +273,7 @@ while cap.isOpened():
     end_time = time.time()
     real_fps = 1 / (end_time - start_time)
 
+    # Draw information on screen
     draw_text(cropped, f"reps: {rep_count}", (10,30))
     draw_text(cropped, f"state: {pose_state}", (10,60))
     draw_text(cropped, f"fps: {real_fps:.2f}", (10,90))
