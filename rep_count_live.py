@@ -16,7 +16,8 @@ FRAMES_PER_STATE = 2
 MAX_STANDING_UP_FRAMES = 5
 MAX_LOW_TRUST_FRAMES = 10
 MAX_FACING_WRONG_SIDE_FRAMES = 5
-webcam_id = 0
+webcam_id = 1
+total_frames = 0
 
 # Movement states
 STATE_RESTING = "REST" # hip-knee-heel angle below START_ANGLE
@@ -104,7 +105,7 @@ EDGES = {
 
 
 # Load model
-#interpreter = tf.lite.Interpreter(model_path='models/movenet_lightning/3.tflite')
+#interpreter = tf.lite.Interpreter(model_path='models/movenet_lightning_tflite/3.tflite')
 interpreter = tf.lite.Interpreter(model_path='models/movenet_thunder_tflite/3.tflite')
 interpreter.allocate_tensors()
 # Setup input and output 
@@ -147,13 +148,13 @@ pose_state = STATE_NONE
 standing_up_consecutive_frame_counter = 0
 low_trust_consecutive_frame_counter = 0
 facing_wrong_side_consecutive_frame_counter = 0
+start_time = 0
 
 cap = cv2.VideoCapture(webcam_id)
+start_time_global = time.time()
 while cap.isOpened():
     ret, frame = cap.read()
-
-    # used to calculate FPS
-    start_time = time.time()
+    total_frames += 1
 
     if not ret:
         print("Failed to capture frame")
@@ -270,30 +271,25 @@ while cap.isOpened():
         if time_elapsed > TIME_BEFORE_SET:
             start_countdown = False
 
-    end_time = time.time()
-    real_fps = 1 / (end_time - start_time)
+
 
     # Draw information on screen
     draw_text(cropped, f"reps: {rep_count}", (10,30))
     draw_text(cropped, f"state: {pose_state}", (10,60))
-    draw_text(cropped, f"fps: {real_fps:.2f}", (10,90))
     draw_text(cropped, f"expected side: {side}", (10,120))
     draw_text(cropped, f"predicted side: {predicted_side}", (10,150))
 
-    cv2.imshow('MoveNet Thunder', cropped)
-    #cv2.imshow('original', frame)
-
-    if cv2.waitKey(10) & 0xFF == ord('q'):
+    key = cv2.waitKey(10) & 0xFF
+    if key == ord('q'):
         break
-
-    if cv2.waitKey(10) & 0xFF == ord('l'):
+    elif key == ord('l'):
         side = 'l'
         hip = 11
         knee = 13
         heel = 15
         start_countdown = True
         countdown_timer_start = time.time()
-    if cv2.waitKey(10) & 0xFF == ord('r'):
+    elif key == ord('r'):
         side = 'r'
         hip = 12
         knee = 14
@@ -301,5 +297,15 @@ while cap.isOpened():
         start_countdown = True
         countdown_timer_start = time.time()
 
+    end_time = time.time()
+    real_fps = 1 / (end_time - start_time)
+    # used to calculate FPS
+    start_time = time.time()
+    draw_text(cropped, f"fps: {real_fps:.2f}", (10,90))
+    cv2.imshow('MoveNet Thunder', cropped)
+    # cv2.imshow('original', frame)
+
+end_time_global = time.time()
+print(f"FPS AVG: {total_frames / (end_time_global - start_time_global)}")
 cap.release()
 cv2.destroyAllWindows()
