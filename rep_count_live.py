@@ -8,6 +8,7 @@ target_width = 256
 target_height = 256
 TRUST_THRESHOLD = 0.1
 MAX_ANGLE_VARIATION_THRESHOLD = 10
+HIP_SHOULDER_DEGREES_THRESHOLD = 25
 TIME_BEFORE_SET = 5
 MAX_MISSING_FRAMES = 10
 START_ANGLE = 105
@@ -16,7 +17,8 @@ FRAMES_PER_STATE = 2
 MAX_STANDING_UP_FRAMES = 5
 MAX_LOW_TRUST_FRAMES = 10
 MAX_FACING_WRONG_SIDE_FRAMES = 5
-webcam_id = 1
+MAX_BACK_NOT_STRAIGHT_FRAMES = 5
+webcam_id = 0
 total_frames = 0
 
 # Movement states
@@ -55,7 +57,7 @@ def draw_connections(frame, keypoints, edges, confidence_threshold):
 def draw_text(frame, string, position):
     fonte = cv2.FONT_HERSHEY_SIMPLEX
     escala = 1
-    cor = (255, 255, 255)
+    cor = (0, 0, 255)
     espessura = 2
 
     cv2.putText(frame, string, position, fonte, escala, cor, espessura)
@@ -121,20 +123,26 @@ side = 'r'
 hip = 12
 knee = 14
 heel = 16
+shoulder = 6
 if side == "l":
     hip = 11
     knee = 13
     heel = 15
+    shoulder = 5
 elif side == "r":
     hip = 12
     knee = 14
     heel = 16
+    shoulder = 6
+
 
 # variables used to count reps
 movement_initiated = False
 rep_count = 0
 previous_keypoints = None
 current_hip_knee_heel_angle = -1
+
+hip_shoulder_angle = 0
 
 # variables used to start the countdown after switching sides
 start_countdown = False
@@ -148,6 +156,7 @@ pose_state = STATE_NONE
 standing_up_consecutive_frame_counter = 0
 low_trust_consecutive_frame_counter = 0
 facing_wrong_side_consecutive_frame_counter = 0
+back_not_straight_consecutive_frame_counter = 0
 start_time = 0
 
 cap = cv2.VideoCapture(webcam_id)
@@ -192,47 +201,61 @@ while cap.isOpened():
             # only analyze frame if person is facing the correct side
             if ((side == 'r' and keypoints_with_scores[0][0][hip][1] < keypoints_with_scores[0][0][knee][1]) or
                     (side == 'l' and keypoints_with_scores[0][0][hip][1] > keypoints_with_scores[0][0][knee][1])):
-                if side == 'r':
-                    predicted_side = 'r'
-                else:
-                    predicted_side = 'l'
+                hip_point_axis = keypoints_with_scores[0][0][hip].copy()
+                hip_point_axis[0] = 0 # decrease y axis
+                hip_shoulder_angle = calcular_angulo(keypoints_with_scores[0][0][shoulder], keypoints_with_scores[0][0][hip], hip_point_axis)
+                #print(f"points: {keypoints_with_scores[0][0][shoulder]}, {keypoints_with_scores[0][0][hip]}, {hip_point_axis}")
+                #print(f"angle: {hip_shoulder_angle}")
+                if hip_shoulder_angle <= HIP_SHOULDER_DEGREES_THRESHOLD:
+                    if side == 'r':
+                        predicted_side = 'r'
+                    else:
+                        predicted_side = 'l'
 
-                facing_wrong_side_consecutive_frame_counter = 0 # reset facing_wrong_side_consecutive_frame_counter
+                    facing_wrong_side_consecutive_frame_counter = 0 # reset facing_wrong_side_consecutive_frame_counter
 
-                #current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
-                #                                              keypoints_with_scores[0][0][knee],
-                #                                              keypoints_with_scores[0][0][heel])
-                #print(f"current angle: {current_hip_knee_heel_angle}")
+                    #current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
+                    #                                              keypoints_with_scores[0][0][knee],
+                    #                                              keypoints_with_scores[0][0][heel])
+                    #print(f"current angle: {current_hip_knee_heel_angle}")
 
-                if pose_state != STATE_NONE:
-                    if pose_state == STATE_RESTING:
-                        if START_ANGLE <= current_hip_knee_heel_angle <= halfway:
-                            position_consecutive_frame_counter += 1
-                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
-                            position_consecutive_frame_counter = 0
-                            pose_state = STATE_LESS_THAN_HALFWAY
-                    elif pose_state == STATE_LESS_THAN_HALFWAY:
-                        if halfway <= current_hip_knee_heel_angle <= END_ANGLE:
-                            position_consecutive_frame_counter += 1
-                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
-                            position_consecutive_frame_counter = 0
-                            pose_state = STATE_MORE_THAN_HALFWAY
-                    elif pose_state == STATE_MORE_THAN_HALFWAY:
-                        if END_ANGLE <= current_hip_knee_heel_angle:
-                            position_consecutive_frame_counter += 1
-                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
-                            position_consecutive_frame_counter = 0
-                            pose_state = STATE_EXTENDED
-                            rep_count += 1
-                    elif pose_state == STATE_EXTENDED:
+                    if pose_state != STATE_NONE:
+                        if pose_state == STATE_RESTING:
+                            if START_ANGLE <= current_hip_knee_heel_angle <= halfway:
+                                position_consecutive_frame_counter += 1
+                            if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                                position_consecutive_frame_counter = 0
+                                pose_state = STATE_LESS_THAN_HALFWAY
+                        elif pose_state == STATE_LESS_THAN_HALFWAY:
+                            if halfway <= current_hip_knee_heel_angle <= END_ANGLE:
+                                position_consecutive_frame_counter += 1
+                            if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                                position_consecutive_frame_counter = 0
+                                pose_state = STATE_MORE_THAN_HALFWAY
+                        elif pose_state == STATE_MORE_THAN_HALFWAY:
+                            if END_ANGLE <= current_hip_knee_heel_angle:
+                                position_consecutive_frame_counter += 1
+                            if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                                position_consecutive_frame_counter = 0
+                                pose_state = STATE_EXTENDED
+                                rep_count += 1
+                        elif pose_state == STATE_EXTENDED:
+                            if current_hip_knee_heel_angle <= START_ANGLE:
+                                position_consecutive_frame_counter += 1
+                            if position_consecutive_frame_counter == FRAMES_PER_STATE:
+                                position_consecutive_frame_counter = 0
+                                pose_state = STATE_RESTING
+                    else:
                         if current_hip_knee_heel_angle <= START_ANGLE:
-                            position_consecutive_frame_counter += 1
-                        if position_consecutive_frame_counter == FRAMES_PER_STATE:
-                            position_consecutive_frame_counter = 0
                             pose_state = STATE_RESTING
                 else:
-                    if current_hip_knee_heel_angle <= START_ANGLE:
-                        pose_state = STATE_RESTING
+                    if back_not_straight_consecutive_frame_counter != -1:
+                        back_not_straight_consecutive_frame_counter += 1
+                    if back_not_straight_consecutive_frame_counter == MAX_BACK_NOT_STRAIGHT_FRAMES:
+                        print("back not straight!")
+                        pose_state = STATE_NONE
+                        position_consecutive_frame_counter = 0
+                        back_not_straight_consecutive_frame_counter = -1
             else:
                 if side == 'r':
                     predicted_side = 'l'
@@ -271,7 +294,7 @@ while cap.isOpened():
         time_elapsed = time.time() - countdown_timer_start
         if time_elapsed!= 0:
             time_left_before_set = round(TIME_BEFORE_SET - time_elapsed)
-        draw_text(cropped, f"time left: {time_left_before_set}", (200,30))
+        draw_text(cropped, f"time left: {time_left_before_set}", (280,60))
         if time_elapsed > TIME_BEFORE_SET:
             start_countdown = False
 
@@ -283,6 +306,7 @@ while cap.isOpened():
     draw_text(cropped, f"expected side: {side}", (10,120))
     draw_text(cropped, f"predicted side: {predicted_side}", (10,150))
     draw_text(cropped, f"leg angle: {current_hip_knee_heel_angle:.2f}", (10,180))
+    draw_text(cropped, f"back angle: {hip_shoulder_angle:.2f}", (180,30))
 
     key = cv2.waitKey(10) & 0xFF
     if key == ord('q'):
