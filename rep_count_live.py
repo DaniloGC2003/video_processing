@@ -178,6 +178,10 @@ while cap.isOpened():
     trust_hip = keypoints_with_scores[0][0][hip][2]
     trust_knee = keypoints_with_scores[0][0][knee][2]
     trust_heel = keypoints_with_scores[0][0][heel][2]
+    current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
+                                                  keypoints_with_scores[0][0][knee],
+                                                  keypoints_with_scores[0][0][heel])
+    # print(f"current angle: {current_hip_knee_heel_angle}")
     # ignore frames with low trust
     if trust_hip > TRUST_THRESHOLD and trust_knee > TRUST_THRESHOLD and trust_heel > TRUST_THRESHOLD:
         low_trust_consecutive_frame_counter = 0 # reset low_trust_consecutive_frame_counter
@@ -195,9 +199,9 @@ while cap.isOpened():
 
                 facing_wrong_side_consecutive_frame_counter = 0 # reset facing_wrong_side_consecutive_frame_counter
 
-                current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
-                                                              keypoints_with_scores[0][0][knee],
-                                                              keypoints_with_scores[0][0][heel])
+                #current_hip_knee_heel_angle = calcular_angulo(keypoints_with_scores[0][0][hip],
+                #                                              keypoints_with_scores[0][0][knee],
+                #                                              keypoints_with_scores[0][0][heel])
                 #print(f"current angle: {current_hip_knee_heel_angle}")
 
                 if pose_state != STATE_NONE:
@@ -278,6 +282,7 @@ while cap.isOpened():
     draw_text(cropped, f"state: {pose_state}", (10,60))
     draw_text(cropped, f"expected side: {side}", (10,120))
     draw_text(cropped, f"predicted side: {predicted_side}", (10,150))
+    draw_text(cropped, f"leg angle: {current_hip_knee_heel_angle:.2f}", (10,180))
 
     key = cv2.waitKey(10) & 0xFF
     if key == ord('q'):
